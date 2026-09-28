@@ -341,3 +341,37 @@ def test_moment_action_refuses_ambiguous_target_before_touching_uia(tmp_path):
     import pytest
     with pytest.raises(ValueError, match='无法唯一定位'):
         Automation(App()).moment_action('like', 'one')
+
+
+def test_moment_automation_is_prospective_and_deduplicates_each_action(tmp_path, monkeypatch):
+    db = tmp_path / 'archive.sqlite'
+    with sqlite3.connect(db) as c:
+        c.execute('CREATE TABLE moments(id TEXT,nickname TEXT,body TEXT,detail TEXT,ts INTEGER)')
+        c.execute('INSERT INTO moments VALUES(?,?,?,?,?)', ('old', 'Alice', '已有动态', '{}', 1))
+
+    class Archive:
+        @contextlib.contextmanager
+        def connect(self):
+            with sqlite3.connect(db) as c:
+                c.row_factory = sqlite3.Row
+                yield c
+
+    class App:
+        state = tmp_path
+        demo = False
+        def account(self): return {'id': 'account-1', 'active': True, 'has_archive': True}
+        def archive(self): return Archive()
+
+    automation = Automation(App())
+    automation.config.update(moment_auto_like=True, moment_auto_comment=True)
+    calls = []
+    monkeypatch.setattr(automation, '_wait_for_desktop_idle', lambda: None)
+    monkeypatch.setattr(automation, '_moment_ai_text', lambda *args: '自然评论')
+    monkeypatch.setattr(automation, 'moment_action', lambda action, mid, content='', **kw: calls.append((action, mid, content)))
+    automation._run_moment_automation()
+    assert calls == []
+    with sqlite3.connect(db) as c:
+        c.execute('INSERT INTO moments VALUES(?,?,?,?,?)', ('new', 'Bob', '刚刚发布的新动态', '{}', 2))
+    automation._run_moment_automation()
+    automation._run_moment_automation()
+    assert calls == [('like', 'new', ''), ('comment', 'new', '自然评论')]

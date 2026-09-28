@@ -61,6 +61,13 @@ class Automation:
         self.config.setdefault('emoji_dir', '')
         self.config.setdefault('emoji_probability', 25)
         self.config.setdefault('watermarks', {})
+        self.config.setdefault('moment_auto_like', False)
+        self.config.setdefault('moment_auto_comment', False)
+        self.config.setdefault('moment_auto_reply', False)
+        self.config.setdefault('moment_self_name', '')
+        self.config.setdefault('moment_prompt', '友好、自然、具体地回应这条朋友圈，不要套话，不要杜撰。')
+        self.config.setdefault('moment_interval', 60)
+        self.config.setdefault('moment_seen', {})
         self.secret_dir = (application.state if getattr(application, 'demo', False) else
                            Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / 'Shiguang' / 'secrets')
         self.secret_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +84,9 @@ class Automation:
         self.reply_workers = None
         self.scheduled_executor = None
         self.scheduled_future = None
+        self.moment_executor = None
+        self.moment_future = None
+        self.moment_next_check = 0.0
         self.active_replies = {}
         self.reply_lock = threading.Lock()
         self.wake = threading.Event()
@@ -120,6 +130,12 @@ class Automation:
                 'random_emoji': self.config['random_emoji'],
                 'emoji_dir': self.config['emoji_dir'],
                 'emoji_probability': self.config['emoji_probability'],
+                'moment_auto_like': self.config['moment_auto_like'],
+                'moment_auto_comment': self.config['moment_auto_comment'],
+                'moment_auto_reply': self.config['moment_auto_reply'],
+                'moment_self_name': self.config['moment_self_name'],
+                'moment_prompt': self.config['moment_prompt'],
+                'moment_interval': self.config['moment_interval'],
                 'scheduled': [dict(j) for j in self.scheduled if j.get('account_id') == current_account][-30:],
                 'has_key': bool(read_json(self._secret_for(self.config['provider_id'])).get('account_id') == current_account),
                 'events': list(self.events)[-30:]}
@@ -221,6 +237,12 @@ class Automation:
         random_emoji = data.get('random_emoji', self.config['random_emoji'])
         emoji_dir = data.get('emoji_dir', self.config['emoji_dir'])
         emoji_probability = data.get('emoji_probability', self.config['emoji_probability'])
+        moment_auto_like = data.get('moment_auto_like', self.config['moment_auto_like'])
+        moment_auto_comment = data.get('moment_auto_comment', self.config['moment_auto_comment'])
+        moment_auto_reply = data.get('moment_auto_reply', self.config['moment_auto_reply'])
+        moment_self_name = data.get('moment_self_name', self.config['moment_self_name'])
+        moment_prompt = data.get('moment_prompt', self.config['moment_prompt'])
+        moment_interval = data.get('moment_interval', self.config['moment_interval'])
         if not all(isinstance(x, str) for x in (api_url, model, system_prompt)) or not model.strip() or len(model) > 100 or len(system_prompt) > 2000:
             raise ValueError('模型设置无效。')
         if not isinstance(contact_prompts, dict) or len(contact_prompts) > 100 or any(
@@ -239,6 +261,14 @@ class Automation:
             raise ValueError('上下文消息数量应为 0–10。')
         if not isinstance(random_emoji, bool) or not isinstance(emoji_dir, str) or len(emoji_dir) > 500 or isinstance(emoji_probability, bool) or not isinstance(emoji_probability, int) or not 0 <= emoji_probability <= 100:
             raise ValueError('随机表情设置无效。')
+        if not all(isinstance(x, bool) for x in (moment_auto_like, moment_auto_comment, moment_auto_reply)):
+            raise ValueError('朋友圈自动操作开关无效。')
+        if not isinstance(moment_self_name, str) or len(moment_self_name) > 80 or not isinstance(moment_prompt, str) or len(moment_prompt) > 2000:
+            raise ValueError('朋友圈名称或提示词无效。')
+        if isinstance(moment_interval, bool) or not isinstance(moment_interval, int) or not 30 <= moment_interval <= 3600:
+            raise ValueError('朋友圈检查间隔应为 30–3600 秒。')
+        if moment_auto_reply and not moment_self_name.strip():
+            raise ValueError('自动回复评论前请填写你在朋友圈显示的昵称。')
         if random_emoji:
             folder = Path(emoji_dir)
             if not emoji_files(folder):
@@ -258,6 +288,9 @@ class Automation:
                 raise ValueError('启用前请填写回复内容。')
             if data.get('enabled') and mode == 'ai' and provider_id != 'ollama' and not (new_key or read_json(self._secret_for(provider_id)).get('account_id') == account['id']):
                 raise ValueError('启用 AI 回复前请填写 API Key。')
+            if (moment_auto_comment or moment_auto_reply) and provider_id != 'ollama' and not (
+                    new_key or read_json(self._secret_for(provider_id)).get('account_id') == account['id']):
+                raise ValueError('启用朋友圈 AI 评论前，请先在 AI 模型页保存 API Key。')
             if data.get('enabled') and not self.config['enabled']:
                 # Starting is prospective: never reply to an imported backlog.
                 key = account['id']
@@ -272,7 +305,10 @@ class Automation:
                            batch_seconds=batch_seconds, time_awareness=time_awareness,
                            image_recognition=image_recognition, emoji_recognition=emoji_recognition,
                            context_turns=context_turns, random_emoji=random_emoji,
-                           emoji_dir=emoji_dir.strip(), emoji_probability=emoji_probability)
+                           emoji_dir=emoji_dir.strip(), emoji_probability=emoji_probability,
+                           moment_auto_like=moment_auto_like, moment_auto_comment=moment_auto_comment,
+                           moment_auto_reply=moment_auto_reply, moment_self_name=moment_self_name.strip(),
+                           moment_prompt=moment_prompt.strip(), moment_interval=moment_interval)
         self.pending.clear()
         atomic_json(self.path, self.config)
         self.wake.set()
@@ -283,6 +319,7 @@ class Automation:
             return
         self.reply_workers = ThreadPoolExecutor(max_workers=6, thread_name_prefix='reply-contact')
         self.scheduled_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='scheduled-send')
+        self.moment_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='moment-automation')
         self.thread = threading.Thread(target=self._run, name='message-automation', daemon=True)
         self.thread.start()
 
@@ -295,6 +332,8 @@ class Automation:
             self.reply_workers.shutdown(wait=False, cancel_futures=True)
         if self.scheduled_executor:
             self.scheduled_executor.shutdown(wait=False, cancel_futures=True)
+        if self.moment_executor:
+            self.moment_executor.shutdown(wait=False, cancel_futures=True)
 
     def _event(self, message):
         with self.events_lock:
@@ -378,6 +417,16 @@ class Automation:
                         except Exception as exc:
                             self._event('主动消息检查失败：' + str(exc)[:120])
                     self.scheduled_future = self.scheduled_executor.submit(self._run_scheduled)
+                moment_enabled = any(self.config.get(k) for k in ('moment_auto_like', 'moment_auto_comment', 'moment_auto_reply'))
+                if (moment_enabled and self.moment_executor and time.monotonic() >= self.moment_next_check
+                        and (self.moment_future is None or self.moment_future.done())):
+                    if self.moment_future is not None:
+                        try:
+                            self.moment_future.result()
+                        except Exception as exc:
+                            self._event('朋友圈自动操作失败：' + str(exc)[:120])
+                    self.moment_next_check = time.monotonic() + self.config['moment_interval']
+                    self.moment_future = self.moment_executor.submit(self._run_moment_automation)
                 if not self.config['enabled']:
                     continue
                 try:
@@ -743,12 +792,153 @@ class Automation:
         source='\x1f'.join([item.publisher or '',item.text or '',item.timestamp or '',str(item.image_count)])
         return hashlib.sha256(source.encode('utf-8')).hexdigest()
 
+    @staticmethod
+    def _accessibility_snapshot():
+        """Capture the screen-reader flag and Weixin Qt gate for later restore."""
+        if os.name != 'nt':
+            return None
+        import ctypes
+        from mywxplus._vendor.wechatauto.uia_driver import WeChatUIA, SPI_GETSCREENREADER
+        previous = ctypes.c_int(0)
+        ctypes.windll.user32.SystemParametersInfoW(SPI_GETSCREENREADER, 0, ctypes.byref(previous), 0)
+        gates = []
+        engine = WeChatUIA()
+        for hwnd in engine._wechat_hwnds():
+            pid = engine._pid_from_hwnd(hwnd)
+            module = engine._weixin_dll_module(pid) if pid else None
+            if not module:
+                continue
+            base, _, dll = module
+            for rva in engine._qaccessible_candidate_rvas(dll)[:4]:
+                handle = ctypes.windll.kernel32.OpenProcess(0x0400|0x0010|0x0020|0x0008, False, pid)
+                if not handle:
+                    continue
+                value = engine._read_process_byte(handle, base + rva)
+                ctypes.windll.kernel32.CloseHandle(handle)
+                if value is not None:
+                    gates.append((pid, base + rva, value))
+                    break
+        return previous.value, gates
+
+    @staticmethod
+    def _restore_accessibility(snapshot):
+        if not snapshot or os.name != 'nt':
+            return
+        import ctypes
+        from mywxplus._vendor.wechatauto.uia_driver import WeChatUIA
+        previous, gates = snapshot
+        engine = WeChatUIA()
+        for pid, address, value in gates:
+            handle = ctypes.windll.kernel32.OpenProcess(0x0400|0x0010|0x0020|0x0008, False, pid)
+            if handle:
+                engine._write_process_byte(handle, address, value)
+                ctypes.windll.kernel32.CloseHandle(handle)
+        engine._set_screen_reader_flag(bool(previous))
+
+    @staticmethod
+    def _prepare_moment_uia():
+        from mywxplus._vendor.wechatauto.uia_driver import WeChatUIA
+        if not WeChatUIA().ensure_materialized(timeout=8, force=True):
+            raise ValueError('当前微信没有可访问的朋友圈 UIA 树。')
+
+    def _moment_ai_text(self, purpose, author, body, comment=''):
+        from .llm import complete, load_key
+        account_id = self.app.account()['id']
+        key = load_key(self._secret_for(self.config['provider_id']), account_id)
+        if self.config['provider_id'] != 'ollama' and not key:
+            raise ValueError('AI 模型尚未保存密钥')
+        instruction = (self.config['moment_prompt'] + '\n只输出一条可直接发送的中文，1至80字。'
+                       '尊重对方，不评价隐私，不杜撰共同经历，不使用营销套话。')
+        incoming = '朋友圈作者：' + author + '\n朋友圈正文：' + (body or '[无文字]')
+        if purpose == 'reply':
+            incoming += '\n对方评论：' + comment + '\n任务：回复这条评论。'
+        else:
+            incoming += '\n任务：评论这条朋友圈。'
+        return complete(self.config['api_url'], key, self.config['model'], instruction,
+                        incoming, author)[:80]
+
+    def _run_moment_automation(self):
+        """Process only newly archived posts/comments and persist dedupe keys."""
+        import comtypes
+        comtypes.CoInitialize()
+        try:
+            account = self.app.account()
+            if not account.get('active') or not account.get('has_archive'):
+                return
+            aid = account['id']
+            with self.app.archive().connect() as db:
+                rows = db.execute('SELECT id,nickname,body,detail FROM moments ORDER BY ts DESC LIMIT 100').fetchall()
+            known = set(self.config['moment_seen'].get(aid, []))
+            current = set()
+            candidates = []
+            own_name = self.config['moment_self_name'].strip()
+            for row in rows:
+                mid, author, body = str(row['id']), (row['nickname'] or '').strip(), (row['body'] or '').strip()
+                like_key, comment_post_key = 'like:' + mid, 'comment:' + mid
+                current.update((like_key, comment_post_key))
+                if author and author != own_name:
+                    if self.config['moment_auto_like'] and like_key not in known:
+                        candidates.append(('like', mid, author, body, '', ''))
+                    if self.config['moment_auto_comment'] and comment_post_key not in known:
+                        candidates.append(('comment', mid, author, body, '', ''))
+                try:
+                    detail = json.loads(row['detail'] or '{}')
+                except (TypeError, ValueError):
+                    detail = {}
+                if own_name and author == own_name:
+                    for item in detail.get('comments') or []:
+                        who = (item.get('nickname') or item.get('username') or '').strip()
+                        content = (item.get('content') or '').strip()
+                        if not who or not content or who == own_name:
+                            continue
+                        comment_key = 'reply:' + hashlib.sha256((mid+'\0'+who+'\0'+content).encode()).hexdigest()
+                        current.add(comment_key)
+                        if comment_key not in known:
+                            candidates.append(('reply', mid, author, body, who, content))
+            if aid not in self.config['moment_seen']:
+                self.config['moment_seen'][aid] = sorted(current)[-1500:]
+                atomic_json(self.path, self.config)
+                self._event('朋友圈自动操作已建立起点，只处理之后出现的新动态和评论。')
+                return
+            completed = set(known)
+            actions = 0
+            for kind, mid, author, body, who, content in candidates:
+                if actions >= 3 or self.stop_event.is_set():
+                    break
+                try:
+                    if kind == 'like':
+                        self._wait_for_desktop_idle()
+                        self.moment_action('like', mid)
+                        actions += 1
+                        completed.add('like:' + mid)
+                    elif kind == 'comment':
+                        text = self._moment_ai_text('comment', author, body)
+                        self._wait_for_desktop_idle()
+                        self.moment_action('comment', mid, text)
+                        actions += 1
+                        completed.add('comment:' + mid)
+                    elif self.config['moment_auto_reply']:
+                        text = self._moment_ai_text('reply', who, body, content)
+                        self._wait_for_desktop_idle()
+                        self.moment_action('reply', mid, text, reply_to=who, target_text=content)
+                        actions += 1
+                        completed.add('reply:' + hashlib.sha256((mid+'\0'+who+'\0'+content).encode()).hexdigest())
+                except Exception as exc:
+                    self._event(('回复评论' if kind == 'reply' else ('点赞' if kind == 'like' else '评论')) + '失败：' + str(exc)[:120])
+            # Keep successful keys plus current baseline; failed candidates remain retryable.
+            self.config['moment_seen'][aid] = sorted(completed | (current & known))[-1500:]
+            atomic_json(self.path, self.config)
+        finally:
+            comtypes.CoUninitialize()
+
     def live_moments(self):
         if not self.app.account().get('active'):
             raise ValueError('请先登录微信。')
         import comtypes
         comtypes.CoInitialize()
+        accessibility = self._accessibility_snapshot()
         try:
+            self._prepare_moment_uia()
             from mywxplus._vendor.wechatauto import WeChat
             with self.gui_lock:
                 wx=WeChat(); moments=wx.Moment
@@ -759,6 +949,7 @@ class Automation:
                                   'time':x.timestamp,'image_count':x.image_count,
                                   'fingerprint':self._moment_fingerprint(x)} for i,x in enumerate(items[:50])]}
         finally:
+            self._restore_accessibility(accessibility)
             comtypes.CoUninitialize()
 
     def moment_action_live(self, action, index, fingerprint, content=''):
@@ -770,7 +961,9 @@ class Automation:
             raise ValueError('评论内容应为 1–300 字。')
         import comtypes
         comtypes.CoInitialize()
+        accessibility = self._accessibility_snapshot()
         try:
+            self._prepare_moment_uia()
             from mywxplus._vendor.wechatauto import WeChat
             with self.gui_lock:
                 wx=WeChat(); moments=wx.Moment
@@ -783,48 +976,62 @@ class Automation:
                     raise ValueError('当前界面存在重复动态，无法安全定位。')
                 result=moments.Like(items[index]) if action=='like' else moments.Comment(items[index],content.strip())
         finally:
+            self._restore_accessibility(accessibility)
             comtypes.CoUninitialize()
         message=result.get('message','')
         self._event(('点赞' if action=='like' else '评论')+'：'+message)
         if not result:raise ValueError(message or '微信未确认操作。')
         return {'ok':True,'message':message}
 
-    def moment_action(self, action, moment_id, content=''):
-        if action not in {'like', 'comment'}:
+    def moment_action(self, action, moment_id, content='', reply_to='', target_text=''):
+        if action not in {'like', 'comment', 'reply'}:
             raise ValueError('不支持的朋友圈操作。')
         account = self.app.account()
         if not account.get('active'):
             raise ValueError('请先登录当前微信账号。')
-        if action == 'comment' and (not isinstance(content, str) or not content.strip() or len(content) > 300):
+        if action in {'comment', 'reply'} and (not isinstance(content, str) or not content.strip() or len(content) > 300):
             raise ValueError('评论内容应为 1–300 字。')
+        if action == 'reply' and (not isinstance(reply_to, str) or not reply_to.strip()):
+            raise ValueError('请选择要回复的评论作者。')
         with self.app.archive().connect() as c:
             c.row_factory = sqlite3.Row
             row = c.execute('SELECT id,nickname,body FROM moments WHERE id=?', (moment_id,)).fetchone()
             if not row:
                 raise ValueError('动态不在当前账号归档中。')
             author, body = (row['nickname'] or '').strip(), (row['body'] or '').strip()
-            if not author or len(body) < 8:
-                raise ValueError('这条动态缺少足够的作者和文字，无法可靠定位 UIA 控件。')
+            if not author or len(body) < 2:
+                raise ValueError('这条动态缺少可定位的作者或文字，请从微信界面选择动态。')
             duplicates = c.execute('SELECT count(*) FROM moments WHERE nickname=? AND body=?', (author, body)).fetchone()[0]
             if duplicates != 1:
                 raise ValueError('存在作者与文字相同的动态，无法唯一定位。')
         import comtypes
         comtypes.CoInitialize()
+        accessibility = self._accessibility_snapshot()
         try:
+            self._prepare_moment_uia()
             from mywxplus._vendor.wechatauto import WeChat
             with self.gui_lock:
                 wx = WeChat()
                 moments = wx.Moment
                 if moments is None or not wx.SwitchToMoments():
                     raise ValueError('微信朋友圈 UIA 树不可用，请打开并解锁微信窗口。')
-                item = moments.find_moment(publisher=author, keyword=body, max_screens=30)
-                if item is None or item.publisher != author or body not in (item.text or ''):
+                keyword = ''.join(body.split())[:20]
+                item = moments.find_moment(publisher=author, keyword=keyword, max_screens=30)
+                visible = ''.join((item.text or '').split()) if item is not None else ''
+                if item is None or item.publisher != author or not visible or (
+                        keyword not in visible and visible[:10] not in keyword):
                     raise ValueError('未在微信界面唯一确认这条动态；没有执行操作。')
-                result = moments.Like(item) if action == 'like' else moments.Comment(item, content.strip())
+                if action == 'like':
+                    result = moments.Like(item)
+                elif action == 'comment':
+                    result = moments.Comment(item, content.strip())
+                else:
+                    result = moments.ReplyComment(item, reply_to.strip(), content.strip(), target_text=target_text)
         finally:
+            self._restore_accessibility(accessibility)
             comtypes.CoUninitialize()
         message = result.get('message', '')
-        self._event(('点赞' if action == 'like' else '评论') + '：' + author + ' · ' + message)
+        self._event(({'like':'点赞','comment':'评论','reply':'回复评论'}[action]) + '：' + author + ' · ' + message)
         if not result:
             raise ValueError(message or '微信界面未确认操作成功。')
         return {'ok': True, 'message': message}

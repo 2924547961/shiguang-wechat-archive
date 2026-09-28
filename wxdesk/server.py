@@ -112,6 +112,7 @@ class Application:
                             sns_seen[account_id] = stamp
                             if (job.get('result') or {}).get('updated'):
                                 self.live_status['moments_revision'] += 1
+                                self.automation.wake.set()
                                 self._queue_moments_media(account_id, (job.get('result') or {}).get('updated_ids', [])[:50])
                     if time.time() - last_scan > 60 and (scan_thread is None or not scan_thread.is_alive()):
                         last_scan = time.time()
