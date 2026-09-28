@@ -443,6 +443,31 @@ class MomentItem(BaseUISubWnd):
                     return ctrl
         return None
 
+    def attach_comment_cell(self, control: uia.Control) -> None:
+        """Associate the adjacent 4.x TimelineCommentCell with this post."""
+        self._ensure_parsed()
+        stack = [(control, 0)]
+        seen = {comment.raw for comment in self.comments if comment.raw}
+        while stack:
+            node, depth = stack.pop()
+            try:
+                text = (node.Name or '').strip()
+                kind = node.ControlTypeName or ''
+            except Exception:
+                continue
+            if text and text not in {_lang(MOMENTS, '评论'), _lang(MOMENTS, '评论区')}:
+                if kind in {'TextControl', 'ListItemControl', 'CustomControl'} and text not in seen:
+                    parsed = MomentComment.from_text(text)
+                    if parsed.author and parsed.content:
+                        self.comments.append(parsed)
+                        self._comment_controls[text] = node
+                        seen.add(text)
+            if depth < 8:
+                try:
+                    stack.extend((child, depth + 1) for child in node.GetChildren())
+                except Exception:
+                    pass
+
 
 class MomentList(BaseUISubWnd):
     """朋友圈时间线列表。"""
@@ -526,15 +551,21 @@ class MomentList(BaseUISubWnd):
             except Exception:
                 children = []
 
+            last_item = None
             for child in children:
                 try:
                     if child.ControlTypeName in {'ListItemControl', 'CustomControl'}:
                         text = getattr(child, 'Name', '') or ''
                         if text.strip():
                             cls_name = getattr(child, 'ClassName', '') or ''
+                            if 'TimelineCommentCell' in cls_name:
+                                if last_item is not None:
+                                    last_item.attach_comment_cell(child)
+                                continue
                             if _is_layout_decoration_cell(cls_name, text):
                                 continue
-                            self._items.append(MomentItem(child, self))
+                            last_item = MomentItem(child, self)
+                            self._items.append(last_item)
                 except Exception:
                     continue
         return list(self._items)

@@ -84,10 +84,10 @@ class Application:
             seen, sns_seen, in_flight = {}, {}, {}
             last_scan = 0
             scan_thread = None
-            while not self.watcher_stop.wait(0.25):
+            while not self.watcher_stop.wait(0.10):
                 self.live_status['enabled'] = bool(self.settings.get('auto_sync'))
                 if not self.settings.get('auto_sync'): continue
-                interval = max(0.25, min(300, float(self.settings.get('sync_interval', 0.5))))
+                interval = max(0.10, min(300, float(self.settings.get('sync_interval', 0.5))))
                 if interval == 1:
                     interval = 0.5
                 self.live_status['interval'] = interval

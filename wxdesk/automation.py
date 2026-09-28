@@ -87,6 +87,9 @@ class Automation:
         self.moment_executor = None
         self.moment_future = None
         self.moment_next_check = 0.0
+        self.moment_live_thread = None
+        self.moment_live_baseline = set()
+        self._moment_live_wx = None
         self.active_replies = {}
         self.reply_lock = threading.Lock()
         self.wake = threading.Event()
@@ -320,6 +323,9 @@ class Automation:
         self.reply_workers = ThreadPoolExecutor(max_workers=6, thread_name_prefix='reply-contact')
         self.scheduled_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='scheduled-send')
         self.moment_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='moment-automation')
+        self.moment_live_thread = threading.Thread(target=self._moment_live_loop,
+                                                   name='moment-live-listener', daemon=True)
+        self.moment_live_thread.start()
         self.thread = threading.Thread(target=self._run, name='message-automation', daemon=True)
         self.thread.start()
 
@@ -328,6 +334,8 @@ class Automation:
         self.wake.set()
         if self.thread:
             self.thread.join(timeout=3)
+        if self.moment_live_thread:
+            self.moment_live_thread.join(timeout=3)
         if self.reply_workers:
             self.reply_workers.shutdown(wait=False, cancel_futures=True)
         if self.scheduled_executor:
@@ -856,6 +864,91 @@ class Automation:
             incoming += '\n任务：评论这条朋友圈。'
         return complete(self.config['api_url'], key, self.config['model'], instruction,
                         incoming, author)[:80]
+
+    def _moment_live_loop(self):
+        """Watch the already-loaded Moments UI without waiting for sns.db."""
+        import comtypes
+        comtypes.CoInitialize()
+        try:
+            while not self.stop_event.wait(.5):
+                if not any(self.config.get(k) for k in (
+                        'moment_auto_like', 'moment_auto_comment', 'moment_auto_reply')):
+                    self.moment_live_baseline.clear()
+                    continue
+                try:
+                    self._moment_live_tick()
+                except Exception as exc:
+                    # A hidden/not-yet-loaded feed is normal; only record other failures.
+                    if '尚未打开' not in str(exc):
+                        self._event('朋友圈实时监听：' + str(exc)[:120])
+        finally:
+            comtypes.CoUninitialize()
+
+    def _moment_live_tick(self):
+        accessibility = self._accessibility_snapshot()
+        try:
+            self._prepare_moment_uia()
+            from mywxplus._vendor.wechatauto import WeChat
+            from mywxplus._vendor.wechatauto.moment import MomentList
+            wx = self._moment_live_wx or WeChat()
+            self._moment_live_wx = wx
+            moments = wx.Moment
+            window = moments._find_sns_window(timeout=.2)
+            if window is None:
+                raise ValueError('朋友圈页面尚未打开')
+            moments._api = window
+            moments._list = MomentList(moments)
+            items = moments.GetMoments(refresh=True)[:30]
+            def revision(item):
+                comments = '\x1e'.join((c.author or '')+'\x1f'+(c.content or '') for c in item.comment_list)
+                return hashlib.sha256((self._moment_fingerprint(item)+'\x1d'+comments).encode()).hexdigest()
+            visible = {revision(item) for item in items}
+            if not self.moment_live_baseline:
+                self.moment_live_baseline = visible
+                return
+            new_items = [item for item in items if revision(item) not in self.moment_live_baseline]
+            self.moment_live_baseline |= visible
+            if not new_items:
+                return
+            own = self.config['moment_self_name'].strip()
+            account_id = self.app.account()['id']
+            persisted = set(self.config['moment_seen'].get(account_id, []))
+            actions = 0
+            for item in new_items:
+                fingerprint = self._moment_fingerprint(item)
+                author, body = item.publisher, item.text
+                if author != own and self.config['moment_auto_like'] and 'live-like:'+fingerprint not in persisted:
+                    with self.gui_lock:
+                        self._wait_for_desktop_idle(); result = moments.Like(item)
+                    if result:
+                        persisted.add('live-like:'+fingerprint); actions += 1
+                if author != own and self.config['moment_auto_comment'] and 'live-comment:'+fingerprint not in persisted and actions < 3:
+                    text = self._moment_ai_text('comment', author, body)
+                    with self.gui_lock:
+                        self._wait_for_desktop_idle(); result = moments.Comment(item, text)
+                    if result:
+                        persisted.add('live-comment:'+fingerprint); actions += 1
+                if author == own and self.config['moment_auto_reply'] and actions < 3:
+                    for comment in item.comment_list:
+                        reply_key = 'live-reply:' + hashlib.sha256(
+                            (fingerprint+'\0'+comment.author+'\0'+comment.content).encode()).hexdigest()
+                        if not comment.author or comment.author == own or reply_key in persisted:
+                            continue
+                        text = self._moment_ai_text('reply', comment.author, body, comment.content)
+                        with self.gui_lock:
+                            self._wait_for_desktop_idle()
+                            result = moments.ReplyComment(item, comment.author, text,
+                                                          target_text=comment.content)
+                        if result:
+                            persisted.add(reply_key); actions += 1
+                        if actions >= 3:
+                            break
+                if actions >= 3:
+                    break
+            self.config['moment_seen'][account_id] = sorted(persisted)[-1500:]
+            atomic_json(self.path, self.config)
+        finally:
+            self._restore_accessibility(accessibility)
 
     def _run_moment_automation(self):
         """Process only newly archived posts/comments and persist dedupe keys."""
