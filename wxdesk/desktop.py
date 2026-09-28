@@ -60,7 +60,7 @@ def main():
         try: threading.Event().wait()
         except KeyboardInterrupt: application.close(); server.shutdown()
         return 0
-    from PySide6.QtCore import QObject, Signal, Slot, QUrl
+    from PySide6.QtCore import QObject, Signal, Slot, QUrl, Qt
     from PySide6.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QColor, QFont
     from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox
     from PySide6.QtWebChannel import QWebChannel
@@ -70,6 +70,7 @@ def main():
     class Bridge(QObject):
         folderSelected = Signal(str, str)
         openRequested = Signal(str)
+        yuanbaoSessionChanged = Signal(bool)
         @Slot(str, str)
         def chooseFolder(self, kind, current):
             title = {"output_dir": "选择导出目录", "data_root": "选择微信数据目录", "emoji_dir": "选择自备表情图片文件夹", "article_output": "选择文章保存目录", "article_cache": "选择自己的微信缓存目录", "archive_dir": "选择拾光归档目录"}.get(kind, "选择文件夹")
@@ -79,6 +80,8 @@ def main():
         def openLocal(self, target): QDesktopServices.openUrl(QUrl.fromLocalFile(target))
         @Slot()
         def quitApp(self): window.close()
+        @Slot()
+        def loginYuanbao(self): open_yuanbao_login()
     class Page(QWebEnginePage):
         def acceptNavigationRequest(self, url, nav_type, is_main):
             if url.scheme() in {"http", "https"} and url.host() == "127.0.0.1" and url.port() == server.server_port: return True
@@ -116,7 +119,58 @@ def main():
             download.cancel()
     profile.downloadRequested.connect(save_download)
     page.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, True)
-    bridge = Bridge(window); bridge.openRequested.connect(bridge.openLocal); application.open_callback = bridge.openRequested.emit
+    yuanbao_root = Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / 'Shiguang' / 'browser' / 'yuanbao'
+    yuanbao_root.mkdir(parents=True, exist_ok=True)
+    yuanbao_profile = QWebEngineProfile('shiguang-yuanbao', app)
+    yuanbao_profile.setPersistentStoragePath(str(yuanbao_root / 'storage'))
+    yuanbao_profile.setCachePath(str(yuanbao_root / 'cache'))
+    yuanbao_profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+    yuanbao_windows = []
+    yuanbao_cookies = {}
+    bridge_ref = []
+
+    def cookie_text(cookie):
+        try:
+            return bytes(cookie.name()).decode('utf-8') + '=' + bytes(cookie.value()).decode('utf-8')
+        except (UnicodeDecodeError, AttributeError):
+            return ''
+
+    def update_yuanbao_cookie(cookie, removed=False):
+        domain = cookie.domain().lstrip('.').lower()
+        if domain != 'yuanbao.tencent.com' and not domain.endswith('.yuanbao.tencent.com'):
+            return
+        item = cookie_text(cookie)
+        if not item:
+            return
+        name = item.split('=', 1)[0]
+        if removed:
+            yuanbao_cookies.pop(name, None)
+        else:
+            yuanbao_cookies[name] = item
+        value = '; '.join(yuanbao_cookies[key] for key in sorted(yuanbao_cookies))
+        application.article_service.set_yuanbao_cookie(value)
+        if bridge_ref:
+            bridge_ref[0].yuanbaoSessionChanged.emit(bool(value))
+
+    def open_yuanbao_login():
+        for item in list(yuanbao_windows):
+            if item.isVisible():
+                item.showNormal(); item.raise_(); item.activateWindow(); return
+        login = QWebEngineView()
+        login.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        login.setWindowTitle('拾光 · 登录腾讯元宝')
+        login.resize(1120, 780)
+        login.setPage(QWebEnginePage(yuanbao_profile, login))
+        login.destroyed.connect(lambda: yuanbao_windows.clear())
+        yuanbao_windows.append(login)
+        login.setUrl(QUrl('https://yuanbao.tencent.com/'))
+        login.show(); login.raise_(); login.activateWindow()
+
+    bridge = Bridge(window); bridge_ref.append(bridge); bridge.openRequested.connect(bridge.openLocal); application.open_callback = bridge.openRequested.emit
+    cookie_store = yuanbao_profile.cookieStore()
+    cookie_store.cookieAdded.connect(lambda cookie: update_yuanbao_cookie(cookie, False))
+    cookie_store.cookieRemoved.connect(lambda cookie: update_yuanbao_cookie(cookie, True))
+    cookie_store.loadAllCookies()
     channel = QWebChannel(page); channel.registerObject("native", bridge); page.setWebChannel(channel)
     window.setCentralWidget(view); view.setUrl(QUrl(server.url)); window.show()
     return app.exec()

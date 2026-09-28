@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from html import escape
+from html import escape, unescape
 import json
 from pathlib import Path
 import re
@@ -75,23 +75,39 @@ def album_articles(client: WeChatClient, url: str, max_pages: int = 0) -> list[A
     return result
 
 
+def _decoded_page(value: str) -> str:
+    value = unescape(value).replace(r"\/", "/").replace(r"\u0026", "&").replace(r"\x26", "&")
+    return value.replace(r"\u003d", "=").replace(r"\x3d", "=")
+
+
 def collect_media(soup: BeautifulSoup) -> dict[str, list[str]]:
     """Collect URLs embedded in WeChat article markup and page scripts."""
     result: dict[str, list[str]] = {"cover": [], "audio": [], "video": []}
     cover = soup.find("meta", attrs={"property": "og:image"})
     if cover and cover.get("content"):
         result["cover"].append(urljoin(BASE, cover["content"]))
-    for node in soup.select("audio, video, source"):
-        src = node.get("src") or node.get("data-src")
+    for node in soup.select("audio, video, source, iframe, mpvoice, mp-common-mpaudio"):
+        src = (node.get("src") or node.get("data-src") or node.get("data-video-src") or
+               node.get("data-mpvoice-src") or node.get("data-url"))
         if src:
-            kind = "audio" if node.name == "audio" or "audio" in (node.get("type") or "") else "video"
-            result[kind].append(urljoin(BASE, src))
-    page = str(soup)
+            kind = "audio" if node.name in {"audio", "mpvoice", "mp-common-mpaudio"} or "audio" in (node.get("type") or "") else "video"
+            result[kind].append(urljoin(BASE, _decoded_page(src)))
+    page = _decoded_page(str(soup))
     for match in re.finditer(r'"voice_id"\s*:\s*"([\w\d]+)"', page):
         result["audio"].append(f"https://res.wx.qq.com/voice/getvoice?mediaid={match.group(1)}")
-    for match in re.finditer(r'https?://mpvideo\.qpic\.cn[^\s"\'<>\\]+', page):
-        result["video"].append(match.group().replace("&amp;", "&"))
+    for match in re.finditer(r'https?://(?:mpvideo\.qpic\.cn|finder\.video\.qq\.com)[^\s"\'<>\\]+', page):
+        result["video"].append(match.group().rstrip("),;"))
     return {kind: list(dict.fromkeys(urls)) for kind, urls in result.items()}
+
+
+def _resolve_video_page(client: WeChatClient, url: str) -> list[str]:
+    parsed = urlparse(url)
+    if parsed.hostname != "mp.weixin.qq.com" or not ("video" in parsed.path or "video" in parsed.query):
+        return [url]
+    response = client._get(url)
+    page = _decoded_page(response.text)
+    return list(dict.fromkeys(match.group().rstrip("),;") for match in re.finditer(
+        r'https?://(?:mpvideo\.qpic\.cn|finder\.video\.qq\.com)[^\s"\'<>\\]+', page)))
 
 
 def save_media(client: WeChatClient, soup: BeautifulSoup, folder: Path,
@@ -100,7 +116,13 @@ def save_media(client: WeChatClient, soup: BeautifulSoup, folder: Path,
     for kind, urls in collect_media(soup).items():
         if kind not in enabled:
             continue
-        for index, url in enumerate(urls, 1):
+        resolved = []
+        for url in urls:
+            try:
+                resolved.extend(_resolve_video_page(client, url) if kind == "video" else [url])
+            except DownloadError as exc:
+                log(f"媒体地址解析失败：{kind}：{exc}")
+        for index, url in enumerate(dict.fromkeys(resolved), 1):
             ext = Path(urlparse(url).path).suffix.lower()
             allowed = {"cover": {".jpg", ".jpeg", ".png", ".webp"},
                        "audio": {".mp3", ".m4a", ".aac", ".amr"},

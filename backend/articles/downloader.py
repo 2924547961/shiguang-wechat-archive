@@ -352,7 +352,23 @@ def save_article(client: WeChatClient, article: Article, options: Options,
 
     if options.cover or options.audio or options.video:
         enabled = {kind for kind in ("cover", "audio", "video") if getattr(options, kind)}
-        save_media(client, soup, folder, enabled, log)
+        media_files = save_media(client, soup, folder, enabled, log)
+        playable = [path for path in media_files if path.name.startswith(("audio_", "video_"))]
+        if playable:
+            section = soup.new_tag("section")
+            section["class"] = "saved-media"
+            heading = soup.new_tag("h2")
+            heading.string = "已保存媒体"
+            section.append(heading)
+            for path in playable:
+                tag = soup.new_tag("audio" if path.name.startswith("audio_") else "video")
+                tag["controls"] = ""
+                tag["preload"] = "metadata"
+                tag["src"] = path.name
+                if tag.name == "video":
+                    tag["style"] = "max-width:100%;height:auto"
+                section.append(tag)
+            content.append(section)
     extra_html = ""
     if options.comments:
         try:

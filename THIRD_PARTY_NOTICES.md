@@ -50,3 +50,9 @@ Upstream project: huiyadanli/RevokeMsgPatcher (GPL-3.0), pinned at commit `8360f
 ## WeChatBot_WXAUTO_SE reference
 
 The user's local `WeChatBot_WXAUTO_SE-3.28.zip` is GPL-3.0-or-later and its own README says it supports WeChat 3.9, not 4.0 and above. Its prompt-per-contact, batching, time-awareness and image-input ideas informed independent implementation in `wxdesk/automation.py` and `wxdesk/llm.py`. No bot source, proprietary wxautox wheel, prompt collection, or bundled emoji assets are copied into this project.
+
+## wx_channels_download research reference
+
+Video Channels share-link behavior was compared with `ltaoo/wx_channels_download`:
+https://github.com/ltaoo/wx_channels_download
+That project uses a Tencent Yuanbao session to exchange a share URL for a playable token, and its legacy mode installs a local root certificate and system proxy. This project independently implements only the HTTPS request flow. Its dedicated Qt WebEngine profile retains the user's own Yuanbao login locally; request cookies are passed to the downloader in process memory and are not written to task records or logs. This project does not include upstream source, proxy, certificate code, or binaries. The referenced project is distributed under MIT with the Commons Clause condition; no code from it is redistributed here.

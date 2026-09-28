@@ -18,7 +18,7 @@ from .downloader import (AUTH_KEYS, SUPPORTED_FORMATS, DownloadError, Options,
                          WeChatClient, parse_article_links, parse_input_url, run_download)
 
 
-MODES = {'single', 'links', 'history', 'album'}
+MODES = {'single', 'links', 'history', 'album', 'channel'}
 
 
 def _safe_url(value: str) -> tuple[str, dict[str, str]]:
@@ -30,6 +30,15 @@ def _safe_url(value: str) -> tuple[str, dict[str, str]]:
                             if key not in AUTH_KEYS])
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, safe_query, '')), {
         key: parameters[key] for key in AUTH_KEYS if parameters.get(key)}
+
+
+def _safe_channel_url(value: str) -> str:
+    if not isinstance(value, str) or len(value) > 4096:
+        raise ValueError('视频号链接无效。')
+    parsed = urlsplit(value.strip())
+    if parsed.scheme != 'https' or parsed.hostname not in {'weixin.qq.com', 'channels.weixin.qq.com'}:
+        raise ValueError('请输入微信视频号 HTTPS 分享链接。')
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ''))
 
 
 def _redact(value: object, auth: dict[str, str]) -> str:
@@ -47,13 +56,18 @@ class ArticleService:
         self.download_lock = threading.Lock()
         self.pending: dict[str, tuple[float, str, dict]] = {}
         self.scanned_auth: dict[str, dict[str, str]] = {}
+        self.yuanbao_cookie = ''
+
+    def set_yuanbao_cookie(self, value: str) -> None:
+        with self.lock:
+            self.yuanbao_cookie = value.strip() if isinstance(value, str) else ''
 
     def status(self, account_id: str) -> dict:
         with self.lock:
             cached = bool(self.scanned_auth.get(account_id))
         return {'built_in': True, 'modes': sorted(MODES), 'formats': list(SUPPORTED_FORMATS),
                 'output': str(Path(self.app.settings['output_dir']) / '公众号文章'),
-                'session_ready': cached}
+                'session_ready': cached, 'yuanbao_ready': bool(self.yuanbao_cookie)}
 
     def clear_session(self, account_id: str):
         with self.lock:
@@ -97,6 +111,8 @@ class ArticleService:
                 raise ValueError('会话参数无效。')
             if value:
                 auth[key] = value.strip()
+        with self.lock:
+            yuanbao_cookie = self.yuanbao_cookie
         if mode == 'links':
             links = parse_article_links(source)
             safe_links = []
@@ -105,6 +121,8 @@ class ArticleService:
                 auth.update(found)
                 safe_links.append(safe)
             source = '\n'.join(dict.fromkeys(safe_links))
+        elif mode == 'channel':
+            source = _safe_channel_url(source)
         else:
             source, found = _safe_url(source.strip())
             auth.update(found)
@@ -144,7 +162,8 @@ class ArticleService:
         ticket = secrets.token_urlsafe(24)
         with self.lock:
             self.pending[ticket] = (time.monotonic(), account_id, {'mode': mode, 'source': source,
-                                                                    'auth': auth, 'options': options})
+                                                                    'auth': auth, 'options': options,
+                                                                    'yuanbao_cookie': yuanbao_cookie.strip()})
         try:
             return self.app.harness.submit(account_id, '', 'article.download', {'ticket': ticket, 'account_id': account_id})
         except Exception:
@@ -178,9 +197,16 @@ class ArticleService:
                 context.progress(10, '正在等待另一项文章下载完成')
             try:
                 context.check()
-                result = context.external('article.download', {'mode': data['mode']},
-                                          lambda: run_download(client, data['source'], data['options'],
-                                                               context.cancel, progress_line, data['mode']))
+                if data['mode'] == 'channel':
+                    from .channel_video import download_channel_video
+                    result = context.external('article.download', {'mode': data['mode']},
+                                              lambda: download_channel_video(data['source'], data['options'].output,
+                                                                             context.cancel, progress_line,
+                                                                             data.get('yuanbao_cookie', '')))
+                else:
+                    result = context.external('article.download', {'mode': data['mode']},
+                                              lambda: run_download(client, data['source'], data['options'],
+                                                                   context.cancel, progress_line, data['mode']))
             finally:
                 self.download_lock.release()
             context.check()
