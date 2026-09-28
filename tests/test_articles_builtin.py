@@ -1,6 +1,7 @@
 import json
 import time
 import threading
+import pytest
 
 from bs4 import BeautifulSoup
 
@@ -93,5 +94,67 @@ def test_builtin_article_status_works_before_wechat_account_is_detected(tmp_path
         status = app.article_service.status('local-articles')
         assert status['built_in'] is True
         assert 'single' in status['modes']
+    finally:
+        app.close()
+
+
+@pytest.mark.parametrize(('mode', 'source'), [
+    ('single', 'https://mp.weixin.qq.com/s/example'),
+    ('links', 'https://mp.weixin.qq.com/s/one\nhttps://mp.weixin.qq.com/s/two'),
+    ('history', 'https://mp.weixin.qq.com/s/example'),
+    ('album', 'https://mp.weixin.qq.com/mp/appmsgalbum?__biz=example&album_id=1'),
+    ('channel', 'https://weixin.qq.com/sph/AK4XEjkZ95'),
+])
+def test_all_five_article_modes_reach_their_downloader(tmp_path, monkeypatch, mode, source):
+    make_demo(tmp_path)
+    app = Application(state=tmp_path, base=tmp_path, demo=True)
+    seen = {}
+
+    def fake_articles(client, safe_source, options, stop, log, selected_mode):
+        seen.update(mode=selected_mode, source=safe_source)
+        return {'saved': 1, 'failed': 0, 'output': str(options.output)}
+
+    def fake_channel(safe_source, output, stop, log, cookie):
+        seen.update(mode='channel', source=safe_source, cookie=cookie)
+        return {'saved': 1, 'failed': 0, 'kind': 'video', 'output': str(output)}
+
+    monkeypatch.setattr('backend.articles.service.run_download', fake_articles)
+    monkeypatch.setattr('backend.articles.channel_video.download_channel_video', fake_channel)
+    try:
+        aid = app.account()['id']
+        if mode == 'channel':
+            app.article_service.set_yuanbao_cookie('parent-domain-session=private')
+        data = {'mode': mode, 'source': source, 'formats': ['html'], 'output': str(tmp_path / mode)}
+        if mode == 'history':
+            data['auth'] = {'uin': 'u', 'key': 'k', 'pass_ticket': 'p'}
+        task = app.article_service.start(aid, data)
+        result = done(app, aid, task['id'])
+        assert result['status'] == 'done'
+        assert seen['mode'] == mode
+        with app.harness.connect() as db:
+            persisted = db.execute('SELECT payload FROM tasks WHERE id=?', (task['id'],)).fetchone()[0]
+        assert 'parent-domain-session' not in persisted
+    finally:
+        app.close()
+
+
+def test_expired_yuanbao_session_is_cleared(tmp_path, monkeypatch):
+    make_demo(tmp_path)
+    app = Application(state=tmp_path, base=tmp_path, demo=True)
+
+    def expired(*args, **kwargs):
+        from backend.articles.downloader import DownloadError
+        raise DownloadError('腾讯元宝登录态已失效，请点击“登录腾讯元宝”重新登录')
+
+    monkeypatch.setattr('backend.articles.channel_video.download_channel_video', expired)
+    try:
+        aid = app.account()['id']
+        app.article_service.set_yuanbao_cookie('session=expired')
+        task = app.article_service.start(aid, {'mode': 'channel',
+            'source': 'https://weixin.qq.com/sph/AK4XEjkZ95', 'formats': ['html'],
+            'output': str(tmp_path / 'channel')})
+        result = done(app, aid, task['id'])
+        assert result['status'] == 'error'
+        assert app.article_service.status(aid)['yuanbao_ready'] is False
     finally:
         app.close()

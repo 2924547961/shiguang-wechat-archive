@@ -69,7 +69,9 @@ def _feed_info(session: requests.Session, body: dict, referer: str) -> dict:
 def _yuanbao_feed(session: requests.Session, source: str, cookie: str) -> dict:
     headers = {"Accept": "application/json, text/plain, */*", "Origin": "https://yuanbao.tencent.com",
                "Referer": "https://yuanbao.tencent.com/", "X-Requested-With": "XMLHttpRequest",
-               "X-Source": "web", "X-Platform": "windows", "X-Language": "zh-CN", "Cookie": cookie}
+               "X-Source": "web", "X-Platform": "windows", "X-Language": "zh-CN",
+               "X-OS-Version": "Windows", "X-Web-Third-Source": "",
+               "X-WebDriver": "false", "X-YbUiTest": "false", "Cookie": cookie}
     response = session.post("https://yuanbao.tencent.com/api/weixin/get_parse_result",
                             json={"type": "video_channel_url", "url": source, "scene": 1},
                             headers=headers, timeout=(10, 30))
@@ -200,5 +202,5 @@ def download_channel_video(source: str, output: Path, stop: threading.Event, log
         f"<h1>{escape(title)}</h1><p>{escape(metadata['author'])}</p><video controls preload=\"metadata\"{cover_attr} src=\"video.mp4\"></video>",
         "utf-8")
     log(f"已保存：{title}（视频号视频）")
-    return {"saved": 1, "failed": 0, "stopped": False, "output": str(folder),
+    return {"saved": 1, "failed": 0, "stopped": False, "kind": "video", "output": str(folder),
             "manifest": str(folder / "metadata.json"), "video": str(video)}

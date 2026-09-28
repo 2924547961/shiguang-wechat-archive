@@ -213,6 +213,8 @@ class ArticleService:
             return result
         except Exception as exc:
             if isinstance(exc, DownloadError):
+                if '腾讯元宝登录态已失效' in str(exc):
+                    self.set_yuanbao_cookie('')
                 raise ValueError(_redact(exc, auth)) from None
             raise
         finally:

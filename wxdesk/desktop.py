@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import os
+import sqlite3
 import sys
 import threading
 from pathlib import Path
@@ -137,7 +138,11 @@ def main():
 
     def update_yuanbao_cookie(cookie, removed=False):
         domain = cookie.domain().lstrip('.').lower()
-        if domain != 'yuanbao.tencent.com' and not domain.endswith('.yuanbao.tencent.com'):
+        # The dedicated profile is isolated from the main application profile.
+        # Yuanbao authentication currently spans both yuanbao.tencent.com and
+        # parent-domain Tencent cookies, all of which a browser sends to the
+        # parse endpoint.
+        if domain != 'tencent.com' and not domain.endswith('.tencent.com'):
             return
         item = cookie_text(cookie)
         if not item:
@@ -171,6 +176,22 @@ def main():
     cookie_store.cookieAdded.connect(lambda cookie: update_yuanbao_cookie(cookie, False))
     cookie_store.cookieRemoved.connect(lambda cookie: update_yuanbao_cookie(cookie, True))
     cookie_store.loadAllCookies()
+    # Some QtWebEngine builds do not emit cookieAdded for cookies restored from
+    # disk until a page changes them. Seed the in-memory request header from the
+    # dedicated profile so an existing login works immediately after restart.
+    cookie_db = yuanbao_root / 'storage' / 'Cookies'
+    if cookie_db.is_file():
+        try:
+            with sqlite3.connect(cookie_db, timeout=.2) as db:
+                for domain, name, value in db.execute(
+                        "SELECT host_key, name, value FROM cookies "
+                        "WHERE host_key='tencent.com' OR host_key LIKE '%.tencent.com'"):
+                    if name and value:
+                        yuanbao_cookies[str(name)] = f'{name}={value}'
+            persisted = '; '.join(yuanbao_cookies[key] for key in sorted(yuanbao_cookies))
+            application.article_service.set_yuanbao_cookie(persisted)
+        except (sqlite3.Error, OSError):
+            pass
     channel = QWebChannel(page); channel.registerObject("native", bridge); page.setWebChannel(channel)
     window.setCentralWidget(view); view.setUrl(QUrl(server.url)); window.show()
     return app.exec()
