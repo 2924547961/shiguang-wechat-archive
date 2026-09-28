@@ -1,0 +1,8 @@
+mywxplus includes modified source from fanyuantaier/wechatauto-replica,
+snapshot c350cd6 (2026-09-27), licensed under Apache License 2.0.
+Source: https://github.com/fanyuantaier/wechatauto-replica
+
+The upstream Python package was relocated beneath mywxplus._vendor.wechatauto,
+and absolute imports and resource names were adjusted for that namespace.
+The mywxplus API, service, backend adapters, models, and tests are separately
+written in this project. The upstream LICENSE is included at the project root.

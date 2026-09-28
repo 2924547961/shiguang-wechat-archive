@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>拾光 · 微信本地档案</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%2326604b'/%3E%3Cpath d='M18 20h28v21H29l-9 7V20' fill='none' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/reader.css">
+<link rel="stylesheet" href="/static/clarity.css">
+<link rel="stylesheet" href="/static/mirror.css"><link rel="stylesheet" href="/static/personal.css"><link rel="stylesheet" href="/static/articles.css"><script src="/static/renderer.js" defer></script><link rel="stylesheet" href="/static/moments.css"><script src="/static/moments.js" defer></script><script src="/static/mirror.js" defer></script><script src="/static/personal.js" defer></script><script src="/static/articles.js" defer></script><script src="/static/storage.js" defer></script><script src="/static/app.js" defer></script></head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <a class="brand" href="#home" aria-label="拾光首页"><span class="brand-mark"><svg viewBox="0 0 40 40" fill="none"><path d="M10 10h20v16H19l-8 6V10Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M16 16h8M16 21h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="31" cy="8" r="3" fill="#d6eabc"/></svg></span><span>拾光<small>SHIGUANG</small></span></a>
+    <div class="nav-caption">微信本地档案</div>
+    <nav id="navigation" aria-label="主导航"></nav>
+    <div class="sidebar-bottom"><div class="local-note"><span class="local-dot"></span>数据保存在本机</div><button class="nav-item" data-nav="settings" id="settings-nav"></button><button class="nav-item" data-action="quit-app" id="quit-app" title="退出拾光">退出软件</button><button class="sidebar-account" id="sidebar-account" data-action="accounts"><div class="avatar muted-avatar">…</div><span>正在寻找微信<small>自动识别当前账号</small></span></button></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb">微信档案 <span>/</span> <strong id="page-name">首页</strong></div><div class="topbar-right"><span id="demo-label" class="demo-label hidden">虚构数据 · 设计预览</span><span class="privacy-label" id="privacy-label"></span><button class="icon-button" data-action="jobs" aria-label="查看任务" title="任务中心" id="task-icon"></button><button class="top-avatar avatar" data-action="accounts" id="top-avatar" aria-label="切换账号">拾</button></div></header>
+    <main id="content" tabindex="-1"><div class="loading-screen"><span class="spinner"></span><h2>正在寻找你的微信</h2><p>正在读取账号与本地归档状态。</p></div></main>
+    <div id="taskbar" class="taskbar hidden" role="status"></div>
+  </div>
+</div>
+<div id="modal" class="modal-layer hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
+<div id="toast" class="toast hidden" role="status"></div>
+</body></html>

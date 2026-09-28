@@ -1,0 +1,55 @@
+name: .Net Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      Reason:
+        description: 'Reasons for temporary build'
+        required: true
+        default: 'No reason. Just do it.'
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.md'
+      - .gitignore
+      - .editorconfig
+      - appveyor.yml
+
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.md'
+      - .gitignore
+      - .editorconfig
+      - appveyor.yml
+
+jobs:
+  build:
+    name: Build (${{ matrix.BUILD_CONFIGURATION }})
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        BUILD_CONFIGURATION: [Debug, Release]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Restore NuGet packages
+        run: nuget restore
+
+      - name: Build Solution
+        run: msbuild /m /p:Configuration=${{ matrix.BUILD_CONFIGURATION }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RevokeMsgPatcher-${{ matrix.BUILD_CONFIGURATION }}
+          path: |
+            .\RevokeMsgPatcher\bin
+            !.\RevokeMsgPatcher\bin\**\RevokeMsgPatcher.exe.config
+            !.\RevokeMsgPatcher\bin\**\RevokeMsgPatcher.pdb

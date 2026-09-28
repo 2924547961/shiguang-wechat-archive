@@ -1,0 +1,49 @@
+.mirror-page { max-width: 1180px; }
+.mirror-page .mirror-contacts { max-height: 230px; overflow: auto; }
+.mirror-page .mirror-field, .mirror-practice label, .mirror-card label, .preflight-result label { display: block; margin: 14px 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.mirror-page textarea, .mirror-practice select, .preflight-result textarea { width: 100%; margin-top: 8px; }
+.mirror-page textarea { min-height: 70px; }
+.mirror-preview { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: #f7f9f5; }
+.mirror-preview h3 { margin: 0 0 8px; font-size: 16px; }
+.mirror-preview-lines { max-height: 230px; overflow: auto; margin: 12px 0; }
+.mirror-preview-lines p { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+.mirror-preview fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.mirror-preview fieldset label { margin-right: 25px; }
+.mirror-warning { padding: 10px 13px; background: #fff7e5; border-left: 3px solid #c79442; border-radius: 4px; font-size: 13px; }
+.mirror-scope { display: flex; gap: 8px 18px; align-items: center; flex-wrap: wrap; padding: 13px 17px; background: #edf3e5; border-radius: 8px; }
+.mirror-scope span { color: var(--text-secondary); font-size: 13px; }
+.mirror-module { position: relative; padding: 22px 22px 22px 62px; margin: 16px 0; border: 1px solid var(--line); border-radius: 9px; background: #fff; line-height: 1.75; }
+.mirror-module h2 { margin: 0 0 12px; font-size: 18px; }
+.mirror-module h3 { margin: 14px 0 6px; font-size: 15px; }
+.mirror-module p { margin: 7px 0; }
+.mirror-number { position: absolute; left: 20px; top: 23px; font-size: 17px; color: #72905d; font-weight: 700; }
+.mirror-list { padding-left: 20px; }
+.mirror-list li { margin: 7px 0; }
+.mirror-confidence { display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 12px; background: #edf3e5; color: #476835; font-size: 11px; }
+.mirror-ref { display: inline-block; padding: 0 5px; color: var(--green); font-size: 12px; font-weight: 700; text-decoration: underline; }
+#mirror-progress { margin-top: 12px; padding: 12px 14px; border: 1px solid #cbdcc4; border-radius: 8px; background: #f7f9f5; color: var(--green); font-size: 13px; }
+#mirror-progress progress { display: block; width: 100%; height: 10px; margin-bottom: 7px; accent-color: var(--green); }
+.insight-skill-progress { margin-top: 12px; padding: 12px 14px; border: 1px solid #cbdcc4; border-radius: 8px; background: #f7f9f5; color: var(--green); font-size: 13px; }
+.insight-skill-progress progress { display: block; width: 100%; height: 10px; margin-bottom: 7px; accent-color: var(--green); }
+.mirror-depth { padding: 12px 0; border-top: 1px solid var(--line); }
+.mirror-depth summary { cursor: pointer; font-weight: 650; }
+.mirror-depth p { white-space: pre-wrap; }
+.mirror-event, .mirror-change, .mirror-cycle { border-left: 3px solid #adc69a; padding: 9px 13px; margin: 12px 0; background: #f7f9f5; border-radius: 4px; }
+.mirror-change details, .mirror-evidence { margin-top: 10px; }
+.mirror-card { padding: 10px; }
+.mirror-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 12px 0; }
+.mirror-steps span:nth-child(odd) { padding: 7px 10px; border: 1px solid #d0ddc4; border-radius: 7px; background: #fff; }
+.mirror-plan { display: grid; grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); gap: 8px; max-height: 340px; overflow: auto; }
+.mirror-day { padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; }
+.mirror-day span { font-weight: 650; font-size: 12px; color: #476835; }
+.mirror-day p { font-size: 13px; }
+.mirror-day small { color: var(--green); }
+.mirror-practice { padding-top: 15px; }
+.mirror-evidence { max-height: 370px; overflow: auto; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+.mirror-evidence p { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; scroll-margin-top: 15px; }
+.mirror-evidence p:target { background: #edf3e5; }
+.chat-compose .btn.small { align-self: center; white-space: nowrap; }
+.preflight-result { margin: 0 20px 12px; padding: 16px; border: 1px solid #cbdcc4; border-radius: 8px; background: #f7f9f5; line-height: 1.7; }
+.preflight-result h3 { margin: 0 0 8px; font-size: 15px; }
+.preflight-result p { margin: 7px 0; font-size: 13px; }
+@media(max-width:700px){.mirror-module{padding:20px 16px}.mirror-number{position:static;display:block;margin-bottom:5px}.mirror-plan{grid-template-columns:1fr}}
